@@ -1,0 +1,52 @@
+{
+    "name":  "@local/dsh-phone-remote",
+    "version":  "0.2.0",
+    "private":  true,
+    "type":  "module",
+    "description":  "Phone Remote: mobile console panel (workspace partitions + session status + dispatch), platform-agnostic push on task completion, tokenized mobile login link, bot long-connection summon.",
+    "keywords":  [
+                     "dsh-plugin",
+                     "deepseek-harness",
+                     "remote",
+                     "mobile",
+                     "wecom",
+                     "feishu",
+                     "qq",
+                     "ntfy"
+                 ],
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg"
+                },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "locale/*.json",
+                  "icon.svg",
+                  "README.md",
+                  "README.en.md",
+                  "docs/*.md",
+                  "companion/*",
+                  "config.example.yml",
+                  "bot.example.json",
+                  ".gitignore",
+                  "publish.ps1"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "immediately":  true,
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-ui-layout",
+                                              "@deepseek-ai/dsh-client-ui-workspace",
+                                              "@deepseek-ai/dsh-client-ui-conversation"
+                                          ]
+                           }
+            }
+}

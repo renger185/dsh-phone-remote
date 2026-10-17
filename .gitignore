@@ -1,0 +1,11 @@
+node_modules/
+logs/
+bin/
+*.log
+wecom-bot.json
+wecom-app.json
+push.json
+push_channels.json
+login-link.txt
+upstream.json
+door-state.json

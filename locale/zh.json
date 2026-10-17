@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "手机远程（Phone Remote）",
+    "description": "把本机 Harness 的登录链接推送到安卓手机（ntfy），并在任务跑完或出错时发提醒。手机浏览器直接映射桌面界面，含工作区分栏。"
+  }
+}

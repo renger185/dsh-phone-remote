@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Phone Remote",
+    "description": "Pushes the local Harness login link to an Android phone via ntfy and notifies when a task finishes or fails. The phone browser mirrors the desktop UI, including the workspace sidebar."
+  }
+}

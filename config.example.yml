@@ -1,0 +1,35 @@
+# 插件行配置模板（脱敏）—— 复制到你的 cordis.patch.yml 并替换 <...>
+#
+# 说明：
+#   - 本文件是"给你抄的模板"，仓库里提交它、不提交真实值。
+#   - 真实值放本机（本地 patch / 本地 json），并写进 .gitignore。
+#
+- insert:
+    - id: phone-remote
+      name: '@local/dsh-phone-remote'
+      config:
+        # 手机入口链接落盘位置（代理与本插件共享）
+        linkFile: '<WORKSPACE_DIR>/login-link.txt'
+
+        # 手机可达的地址前缀（同 WiFi 用局域网 IP；如需出门用，见 temp-door）
+        mobileBaseUrl: 'http://<YOUR_LAN_IP>:51130/'
+
+        # ── 推送出口（平台无关）──────────────────────────────
+        # 方式一：直接给 Webhook 地址（企微群机器人 / 飞书 / 钉钉 / ntfy 均可）
+        pushWebhook: '<YOUR_PUSH_WEBHOOK>'
+        # 方式二：从"通道表"按名字取（适合多通道轮换）
+        # pushChannelsFile: '<WORKSPACE_DIR>/push_channels.json'
+        # pushChannel: 'default'
+
+        # ── 备用后端：ntfy（默认关）──────────────────────────
+        ntfyEnabled: false
+        ntfyUrl: 'https://ntfy.sh/'
+        topic: '<YOUR_TOPIC>'
+
+        # 任务从"忙"转"空闲"后多久推提醒（毫秒），用于合并连续小任务
+        idleDebounceMs: 15000
+
+        # ── 机器人长连接（可选，用于"在外面召唤"）────────────
+        # 该段由配套脚本 bot/*.mjs 读取，不在本插件内使用，列在此处便于一处配置
+        # botId: '<YOUR_BOT_ID>'
+        # botSecret: '<YOUR_BOT_SECRET>'

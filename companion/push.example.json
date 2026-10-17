@@ -1,0 +1,10 @@
+{
+  "_comment": "推送出口模板（平台无关）。复制成 push.json 并填真实地址；该文件已被 .gitignore 排除。也可用环境变量 PUSH_WEBHOOK 覆盖。",
+  "_examples": {
+    "企业微信群机器人": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<YOUR_WECOM_WEBHOOK_KEY>",
+    "飞书自定义机器人": "https://open.feishu.cn/open-apis/bot/v2/hook/<YOUR_TOKEN>",
+    "钉钉自定义机器人": "https://oapi.dingtalk.com/robot/send?access_token=<YOUR_TOKEN>",
+    "ntfy": "https://ntfy.sh/<YOUR_TOPIC>"
+  },
+  "webhook": "<YOUR_PUSH_WEBHOOK>"
+}
