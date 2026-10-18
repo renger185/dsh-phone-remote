@@ -107,6 +107,10 @@ plugin/
 > 关键取舍：**收消息一定要走长连接，不要走"平台把消息推到一个公网回调地址"**。
 > 后者要求一个**固定不变**的公网 HTTPS 地址——家庭宽带几乎做不到（详见 `docs/PITFALLS.md` 第 1、3 条）。
 
+## 演示视频
+
+手机远程实机演示（开门 → 手机浏览器原生页面进入 → 远程派活）：[`media/phone-remote-demo.mp4`](media/phone-remote-demo.mp4)
+
 ## 许可与出处
 
 示例实现以企业微信为基准（官方 SDK `@wecom/aibot-node-sdk`）。
