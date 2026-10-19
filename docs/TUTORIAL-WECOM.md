@@ -203,18 +203,27 @@ client.on('message.text', async (frame) => {
   }
 })
 
-// 起临时门并解析出公网地址（复用 temp-door.mjs）
+// 起临时门并取回公网地址（复用 temp-door.mjs）
+// ⚠️ 不要从子进程输出里"抓第一个地址"：temp-door 现在是先建隧道、再从公网侧自测，
+//    自测不过会换一条重来；抓早了会把**作废地址**回给用户（见 PITFALLS.md 第 15 条）。
+//    正确做法：读 temp-door 写下的 door-state.json，且只认"刚开的这一扇"。
 function openDoor(minutes) {
+  const stateFile = new URL('./door-state.json', import.meta.url)
+  const startedAt = Date.now()
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ['../temp-door.mjs', '--minutes', String(minutes)], { windowsHide: true })
     let done = false
-    const take = (buf) => {
-      const m = /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i.exec(buf.toString())
-      if (m && !done) { done = true; resolve(m[1]) }
-    }
-    child.stdout.on('data', take); child.stderr.on('data', take)
-    child.on('error', () => { if (!done) { done = true; resolve(null) } })
-    setTimeout(() => { if (!done) { done = true; resolve(null) } }, 45000)
+    const finish = (v) => { if (!done) { done = true; clearInterval(timer); resolve(v) } }
+    const timer = setInterval(() => {
+      try {
+        const s = JSON.parse(readFileSync(stateFile, 'utf8'))
+        const openedAt = Date.parse(s?.openedAt ?? '')
+        if (s?.url && Number.isFinite(openedAt) && openedAt >= startedAt - 5000) finish(s.url)
+      } catch {}
+    }, 1000)
+    child.on('error', () => finish(null))
+    child.on('exit', () => finish(null))
+    setTimeout(() => finish(null), 90000)
   })
 }
 
@@ -274,9 +283,10 @@ Start-ScheduledTask -TaskName "DshWecomBot"
 **真机侧（只有人能验）**
 
 - [ ] 同 WiFi 点通知链接 → 能进界面、能派活
+- [ ] **关掉 WiFi 只留流量**，点**通知里的链接** → 能进界面（v0.3.0 起通知自动带公网链接）
 - [ ] 流量环境点临时门链接 → 能进界面
 - [ ] 企微发「开门」→ 会话内收到链接 → 可打开
-- [ ] 任务跑完 → 收到提醒
+- [ ] 任务跑完 → 收到提醒（且链接外面点得开）
 - [ ] **重启电脑后**：机器人仍在线、「开门」仍有效
 
 ---
@@ -291,6 +301,9 @@ Start-ScheduledTask -TaskName "DshWecomBot"
 | 回消息报 `errcode 41004` | 缺 `Secret`（只配了 Token/AESKey） | 补齐凭据 |
 | 推送没到手机 | 群机器人被移除 / 手机通知权限关了 | 群里看机器人是否还在；检查系统通知 |
 | 电脑重启后面板消失 | 插件 Host 半没起来 | 查插件行是否启用、计划任务是否在跑 |
+| **通知里的链接出门打不开** | 老版本通知里放的是局域网地址（出门在公网不存在） | 升到 **v0.3.0**：通知自动开一扇 30 分钟的门、带公网链接（`PITFALLS.md` 第 17 条） |
+| **门"开了"但点开 530 / 转圈** | 只看到公网地址、隧道其实没连上 | 升级 `temp-door.mjs`：要"地址+`Registered tunnel connection`"，还要公网侧实拨一次（`PITFALLS.md` 第 15 条） |
+| **机器人常在线却收不到消息** | 长连接静默假死 | 用带自检自愈的 `wecom-bot.mjs`：未连接 2 分钟重连、5 分钟未连接就退出重拉（`PITFALLS.md` 第 16 条） |
 
 ---
 

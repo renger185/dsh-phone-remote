@@ -207,18 +207,29 @@ client.on('message.text', async (frame) => {
   }
 })
 
-// Start the timed door and parse its public URL (reuses temp-door.mjs)
+// Start the timed door and get its public URL (reuses temp-door.mjs)
+// ⚠️ Do NOT "grab the first URL" from the child's output: temp-door now builds the tunnel
+//    first and then probes it from the public side, retrying with a different tunnel if the
+//    probe fails — grabbing early hands the user a stale URL (see PITFALLS.md #15).
+//    Correct approach: read the door-state.json that temp-door writes, and only accept the
+//    door that was just opened.
 function openDoor(minutes) {
+  const stateFile = new URL('./door-state.json', import.meta.url)
+  const startedAt = Date.now()
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ['../temp-door.mjs', '--minutes', String(minutes)], { windowsHide: true })
     let done = false
-    const take = (buf) => {
-      const m = /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i.exec(buf.toString())
-      if (m && !done) { done = true; resolve(m[1]) }
-    }
-    child.stdout.on('data', take); child.stderr.on('data', take)
-    child.on('error', () => { if (!done) { done = true; resolve(null) } })
-    setTimeout(() => { if (!done) { done = true; resolve(null) } }, 45000)
+    const finish = (v) => { if (!done) { done = true; clearInterval(timer); resolve(v) } }
+    const timer = setInterval(() => {
+      try {
+        const s = JSON.parse(readFileSync(stateFile, 'utf8'))
+        const openedAt = Date.parse(s?.openedAt ?? '')
+        if (s?.url && Number.isFinite(openedAt) && openedAt >= startedAt - 5000) finish(s.url)
+      } catch {}
+    }, 1000)
+    child.on('error', () => finish(null))
+    child.on('exit', () => finish(null))
+    setTimeout(() => finish(null), 90000)
   })
 }
 
@@ -279,9 +290,11 @@ That is an upper-layer extension — implement it against whatever interface you
 **Phone side (human only)**
 
 - [ ] On the same Wi-Fi, tap the notification link → the UI opens and you can dispatch work
+- [ ] **Turn Wi-Fi off (mobile data only)** and tap the notification link → the UI opens
+      (since v0.3.0 notifications always carry a public link; see `PITFALLS.md` #17)
 - [ ] On mobile data, tap the timed-door link → the UI opens
 - [ ] Send “开门” in WeCom → the link arrives in the chat → it opens
-- [ ] A finished task → you get a notification
+- [ ] A finished task → you get a notification (and its link opens outside your home network)
 - [ ] **After rebooting the PC**: the bot is still online and “开门” still works
 
 ---

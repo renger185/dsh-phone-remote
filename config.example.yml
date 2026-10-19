@@ -11,7 +11,9 @@
         # 手机入口链接落盘位置（代理与本插件共享）
         linkFile: '<WORKSPACE_DIR>/login-link.txt'
 
-        # 手机可达的地址前缀（同 WiFi 用局域网 IP；如需出门用，见 temp-door）
+        # 手机可达的地址前缀（同 WiFi 用局域网 IP）
+        # 注意：通知里的链接**不再用这个地址**（局域网地址出门打不开），
+        #       见下面的"公网门"一节——通知一律带公网链接。
         mobileBaseUrl: 'http://<YOUR_LAN_IP>:51130/'
 
         # ── 推送出口（平台无关）──────────────────────────────
@@ -20,6 +22,16 @@
         # 方式二：从"通道表"按名字取（适合多通道轮换）
         # pushChannelsFile: '<WORKSPACE_DIR>/push_channels.json'
         # pushChannel: 'default'
+        #
+        # 兼容旧键名（等价，二选一即可）：wecomWebhook / wecomChannelsFile / wecomChannel
+
+        # ── 公网门（通知里的链接走这里）──────────────────────
+        # 发通知前若没有还够用的临时门，插件会自动开一扇再发；开不成就不带链接。
+        doorScript: '<WORKSPACE_DIR>/temp-door.mjs'        # 默认取 linkFile 同目录的 temp-door.mjs
+        doorStateFile: '<WORKSPACE_DIR>/door-state.json'   # 默认取 linkFile 同目录的 door-state.json
+        doorMinutes: 30                # 每次开门给多少分钟（到点自动关）
+        doorMinRemainingMs: 600000     # 现成的门剩不到 10 分钟就重开一扇
+        doorOpenTimeoutMs: 120000      # 等门开出来的上限
 
         # ── 备用后端：ntfy（默认关）──────────────────────────
         ntfyEnabled: false

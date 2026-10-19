@@ -7,7 +7,16 @@
  * 2. Watch `api-session/status`: when the last running session goes idle,
  *    push "任务跑完了" after a short debounce. Errors push immediately.
  *
- * Notification backend: 企业微信群机器人 (wecomWebhook, 复用投研 P2 通道) 为主,
+ * 通知里的链接（10-19 老板定）：**一律走公网**。发通知前先看有没有还够用的
+ * 临时门（`door-state.json`），不够就自动开一扇 30 分钟的（`--quiet`，不额外
+ * 推消息），把公网地址放进通知；门到 30 分钟自动关。这样人在外面点通知就能
+ * 直接打开界面，不用先手动开门、也不用分辨内网/公网。
+ * 门没开成时宁可不给链接（附一句说明），绝不推一条点不开的死链接。
+ *
+ * 旧行为（仅家里 WiFi 能点的内网链接）已废弃：内网地址在公网不存在，
+ * 出门点它必然打不开——这是 10-19 的投诉根因。
+ *
+ * Notification backend: 企业微信群机器人（wecomWebhook，复用投研 P2 通道）为主，
  * ntfy (ntfyEnabled + topic) 为可选备用。
  *
  * Nothing here blocks or alters the agent loop; every push is fire-and-forget
@@ -17,6 +26,9 @@
 const PUSH_TIMEOUT_MS = 10000
 
 import { readFileSync } from 'node:fs'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { spawn } from 'node:child_process'
 
 export const inject = ['webApp', 'connection']
 
@@ -28,11 +40,21 @@ export function apply(ctx, config) {
   const idleDebounceMs = Number(config.idleDebounceMs ?? 15000)
   const mobileBase = (config.mobileBaseUrl || '').trim()
 
+  // —— 公网门相关配置（10-19 加）———————————————————————————————
+  // 门脚本与门状态文件默认就放在 linkFile 同目录（本机就是 remote-gateway 那份）。
+  const doorScript = (config.doorScript || '').trim() || join(dirname(linkFile), 'temp-door.mjs')
+  const doorStateFile = (config.doorStateFile || '').trim() || join(dirname(linkFile), 'door-state.json')
+  const doorMinutes = Number(config.doorMinutes ?? 30) // 每次开门给 30 分钟
+  const doorMinRemainingMs = Number(config.doorMinRemainingMs ?? 10 * 60 * 1000) // 现成的门剩不到 10 分钟就重开
+  const doorOpenTimeoutMs = Number(config.doorOpenTimeoutMs ?? 120000) // 等门开出来的上限
+
   // 企业微信通道：优先直接给 wecomWebhook；否则从投研那份 push_channels.json
   // 按 wecomChannel(默认 p2) 取，保持"通道地址只有一个真源"，轮换不用改插件。
-  const channelsFile = (config.wecomChannelsFile || '').trim()
-  const channelTier = (config.wecomChannel || 'p2').trim()
-  let wecomWebhook = (config.wecomWebhook || '').trim()
+  // 键名两套都认：wecomWebhook（企微专用）与 pushWebhook（平台无关模板里的写法），
+  // 免得照 config.example.yml 抄了却没生效（10-19 修）。
+  const channelsFile = (config.wecomChannelsFile || config.pushChannelsFile || '').trim()
+  const channelTier = (config.wecomChannel || config.pushChannel || 'p2').trim()
+  let wecomWebhook = (config.wecomWebhook || config.pushWebhook || '').trim()
   if (!wecomWebhook && channelsFile) {
     try {
       const map = JSON.parse(readFileSync(channelsFile, 'utf8'))
@@ -56,9 +78,84 @@ export function apply(ctx, config) {
     }
   }
 
+  // —— 公网门：读现有 / 必要时自动开一扇 ————————————————————————
+  function readDoorRaw() {
+    try {
+      return JSON.parse(readFileSync(doorStateFile, 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  /** 现成的门还有效吗？返回 { url, leftMs } 或 null。 */
+  function readLiveDoor() {
+    const state = readDoorRaw()
+    if (!state?.url) return null
+    const leftMs = Date.parse(state.expiresAt ?? '') - Date.now()
+    if (!Number.isFinite(leftMs) || leftMs <= 0) return null
+    return { url: String(state.url), leftMs }
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  /** 起一扇门（安静模式，不推企微），等它写出门状态后返回公网地址。 */
+  async function openDoor() {
+    const startedAt = Date.now()
+    const child = spawn(process.execPath, [doorScript, '--minutes', String(doorMinutes), '--quiet'], {
+      cwd: dirname(doorScript),
+      windowsHide: true,
+      env: {
+        ...process.env,
+        CLOUDFLARED_PATH: process.env.CLOUDFLARED_PATH || join(dirname(doorScript), 'bin', 'cloudflared.exe'),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let exited = false
+    child.on('error', () => { exited = true })
+    child.on('exit', () => { exited = true })
+    child.stdout?.on('data', () => {})
+    child.stderr?.on('data', () => {})
+
+    const deadline = Date.now() + doorOpenTimeoutMs
+    while (Date.now() < deadline) {
+      await sleep(2000)
+      const state = readDoorRaw()
+      const openedAt = Date.parse(state?.openedAt ?? '')
+      const expiresAt = Date.parse(state?.expiresAt ?? '')
+      if (state?.url && Number.isFinite(openedAt) && openedAt >= startedAt - 5000 && expiresAt > Date.now()) {
+        return String(state.url)
+      }
+      if (exited) break
+    }
+    return null
+  }
+
+  let doorPromise = null
+
+  /** 要一条公网链接：现成的够用就复用，否则开一扇新的；开不出来返回 null。 */
+  async function ensurePublicLink() {
+    const existing = readLiveDoor()
+    if (existing && existing.leftMs >= doorMinRemainingMs) return existing.url
+    if (!doorPromise) {
+      doorPromise = (async () => {
+        try {
+          const url = await openDoor()
+          if (!url) ctx.logger?.warn?.('phone-remote: 公网门没开成，本次通知不带链接')
+          return url
+        } catch (error) {
+          ctx.logger?.warn?.('phone-remote: 开公网门异常: ' + String(error?.message ?? error))
+          return null
+        } finally {
+          doorPromise = null
+        }
+      })()
+    }
+    return doorPromise
+  }
+
   const running = new Set()
   let idleTimer = null
-  let lastPushedLink = null
+  let lastLanLink = null
 
   // 企业微信群机器人（复用投研 P2 通道）：markdown 才能带可点跳转。
   async function pushWecom(title, message, link) {
@@ -122,8 +219,6 @@ export function apply(ctx, config) {
     try {
       const base = ctx.webApp.getAdvertisedUrl()
       const link = toMobileLink(ctx.connection.authenticatedUrl(base))
-      const { writeFile, mkdir } = await import('node:fs/promises')
-      const { dirname, join } = await import('node:path')
       await mkdir(dirname(linkFile), { recursive: true })
       await writeFile(linkFile, link + '\n', 'utf8')
 
@@ -135,9 +230,15 @@ export function apply(ctx, config) {
         'utf8',
       )
 
-      if (link !== lastPushedLink) {
-        lastPushedLink = link
-        await push('小昭：手机远程入口已更新', '同一 WiFi 点链接直接打开 Harness；出门用 UU 远程连回桌面。', link)
+      // 链接内容变了（桌面重启换钥匙/换端口）才提醒一次；提醒里给公网地址。
+      if (link !== lastLanLink) {
+        lastLanLink = link
+        const door = await ensurePublicLink()
+        await push(
+          '小昭：手机远程入口已更新',
+          door ? `点链接直接从公网打开 Harness（公网门 30 分钟内有效）。` : '公网门这次没开成，没带链接；需要时发「开门」给我。',
+          door ?? undefined,
+        )
       }
     } catch (error) {
       ctx.logger?.warn?.('phone-remote: link refresh failed: ' + String(error?.message ?? error))
@@ -158,13 +259,27 @@ export function apply(ctx, config) {
     if (running.size === 0 && !idleTimer) {
       idleTimer = setTimeout(() => {
         idleTimer = null
-        void push('小昭：任务跑完了', '这一轮活干完了，打开手机可以看结果并继续安排。', lastPushedLink ?? undefined)
+        void (async () => {
+          const door = await ensurePublicLink()
+          await push(
+            '小昭：任务跑完了',
+            door ? '这一轮活干完了，点链接直接看结果（公网门 30 分钟内有效）。' : '这一轮活干完了。公网门这次没开成，需要时发「开门」给我。',
+            door ?? undefined,
+          )
+        })()
       }, idleDebounceMs)
     }
   })
 
   ctx.on('api-session/error', (sessionId, message) => {
-    void push('小昭：任务出错了', String(message ?? '会话报错，请打开界面查看'), lastPushedLink ?? undefined)
+    void (async () => {
+      const door = await ensurePublicLink()
+      await push(
+        '小昭：任务出错了',
+        `${String(message ?? '会话报错，请打开界面查看')}${door ? '' : '（公网门这次没开成，没带链接）'}`,
+        door ?? undefined,
+      )
+    })()
   })
 
   ctx.effect(() => () => {
