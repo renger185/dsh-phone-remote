@@ -1,4 +1,4 @@
-# Phone Remote — drive your DSH from a phone
+﻿# Phone Remote — drive your DSH from a phone
 
 > Open the local DeepSeek Harness (DSH) Web UI **in a real mobile browser from anywhere**,
 > get notified when a task finishes, and **summon a remote door by sending one message** —

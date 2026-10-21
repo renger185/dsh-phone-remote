@@ -1,7 +1,9 @@
-node_modules/
+﻿node_modules/
 logs/
 bin/
 *.log
+*.bak
+*.bak_*
 wecom-bot.json
 wecom-app.json
 push.json
