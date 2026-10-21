@@ -31,6 +31,41 @@ param(
   [string]$PushChannels = ''
 )
 
+# ---- SELF CHECK: this file MUST stay pure ASCII (added 2026-10-21) ----
+# Why this gate exists: the BOM problem bit us THREE times. A .ps1 with
+# Chinese text and NO BOM is read by Windows PowerShell 5.1 as the system
+# ANSI code page (GBK here) -> the Chinese turns into mojibake -> the whole
+# script fails to parse. Adding a BOM "fixes" it, but the BOM is lost again
+# the next time ANY tool rewrites the file (an editor, another agent, a
+# formatter) -> so the fix never sticks.
+#
+# The real fix is to keep the file pure ASCII, so the BOM does not matter.
+# This gate is what makes that stick: if somebody adds a Chinese literal
+# or a Chinese comment later, the pack fails loudly HERE (exit 3) instead of
+# failing mysteriously the next time somebody runs the script.
+#
+# If you really need Chinese in this file, build it at runtime from char
+# codes (see function U above) - that is the only supported way.
+$__selfBytes = [System.IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path)
+$__nonAscii = 0
+$__start = 0
+# Skip a UTF-8 BOM if present (3 bytes EF BB BF) - the BOM itself is not
+# "content"; it is the marker that tells PS 5.1 to read the file as UTF-8.
+if ($__selfBytes.Length -ge 3 -and $__selfBytes[0] -eq 0xEF -and $__selfBytes[1] -eq 0xBB -and $__selfBytes[2] -eq 0xBF) {
+  $__start = 3
+}
+for ($__i = $__start; $__i -lt $__selfBytes.Length; $__i++) {
+  if ($__selfBytes[$__i] -gt 127) { $__nonAscii++ }
+}
+if ($__nonAscii -gt 0) {
+  Write-Host ""
+  Write-Host "FAIL - publish.ps1 contains $__nonAscii non-ASCII byte(s)." -ForegroundColor Red
+  Write-Host "   This file MUST stay pure ASCII (PS 5.1 reads a BOM-less .ps1 as ANSI -> mojibake -> syntax error)." -ForegroundColor Red
+  Write-Host "   Fix: use English comments, and build needed Chinese at runtime via U @(0x....)." -ForegroundColor Red
+  Write-Host "   (Do NOT just add a BOM - the next edit drops it again.)" -ForegroundColor Red
+  exit 3
+}
+
 # Build a Chinese string from UTF-16 code points (keeps this file pure ASCII).
 function U([int[]]$codes) {
   return -join ($codes | ForEach-Object { [char]$_ })
@@ -44,14 +79,14 @@ $WS_ZILIAO = U @(0x8D44,0x6599,0x5E93)                    # zi liao ku
 $BOSS = U @(0x8001,0x677F)                                # lao ban
 $NAME = U @(0x7433,0x5A18)                                # qiong niang
 $PH_WORKSPACE = "<" + (U @(0x4F60,0x7684,0x5DE5,0x4F5C,0x533A)) + ">"
-# ⚠ 两个盘符写法的占位符必须【不同】：改写后如果它们变成同一个值，
-#   [ordered]@{...} 就会撞「重复的键」→ 副本脚本语法错（实测踩到）。
+# NOTE: the two drive-letter spellings MUST map to DIFFERENT placeholders.
+#   If they map to the same value, the rewritten text gives [ordered]@{...}
+#   two identical keys -> the published copy is a syntax error (measured).
 $PH_DATADIR   = "<" + (U @(0x4F60,0x7684,0x6570,0x636E,0x76EE,0x5F55)) + ">"
 $PH_DATADIR2  = "<" + (U @(0x4F60,0x7684,0x6570,0x636E,0x76EE,0x5F55,0x4E8C)) + ">"
 $PH_AUTHOR    = U @(0x4F5C,0x8005)                        # zuo zhe
 $PH_ASSISTANT = U @(0x52A9,0x624B)                        # zhu shou
-# 【10-21 boss定：称呼统一用 boss】原来「boss」被换成「作者」，
-#   boss原话：「另外，你说的称呼问题统一用 boss 代替」
+# 2026-10-21 owner rule: the honorific is unified as "boss".
 $PH_BOSS      = "boss"
 
 $excludeFiles = @(
@@ -72,17 +107,22 @@ if ([string]::IsNullOrWhiteSpace($Source)) {
 
 if (-not (Test-Path $Source)) { throw "source dir not found: $Source" }
 
-# ⚠ 2026-10-21 加：打包前**清空目标目录**（.git 除外）。
-#   为什么：原来只 New-Item 不清空 → 上一轮包里的**旧文件会一直留在新包里**。
-#   实测踩到：07:30 那轮打包的相对路径多了一层，产出
-#   companion 下多套嵌套的 mjs、docs 下多套嵌套的 md、locale 下多套嵌套的 json
-#   三套嵌套残留；下一轮打包时它们**不会被覆盖、也不会被删**，
-#   最后连同 .bak 备份一起被拷进发布包 → 闸门判脏、退出码 1。
-#   清空 = 发布包内容只取决于源目录，不会被历史残留污染。
-#   ⚠ .git 必须保留（目标目录同时是 git 仓库，清掉就推不了了）。
+# 2026-10-21: clean the target directory before packing (.git excepted).
+#   Why: the old code only did New-Item, so files left over from a PREVIOUS
+#   pack stayed in the new package forever. Measured 10-21 07:30: one run
+#   produced nested folders (companion under companion, docs under docs,
+#   locale under locale); the next run neither overwrote nor removed them,
+#   and they went into the release package together with a .bak backup ->
+#   the sanitization gate flagged the package (exit 1).
+#   Cleaning makes the package content depend on the source dir only.
+#   .git MUST be kept (the target dir is also the git repo).
+#   media/ MUST be kept too: it holds the demo video, which lives in the
+#   repo and is NOT produced by the packing step. Cleaning it away would
+#   delete a committed file (measured 10-21 11:44 - it showed up as
+#   "D media/phone-remote-demo.mp4" in git status).
 if (Test-Path $Target) {
   Get-ChildItem $Target -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne '.git' } |
+    Where-Object { $_.Name -ne '.git' -and $_.Name -ne 'media' } |
     ForEach-Object {
       Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -92,6 +132,21 @@ New-Item -ItemType Directory -Path $Target -Force | Out-Null
 # ---- rewrite rules for text files (only the COPY is changed; source untouched) ----
 # order matters: specific first, generic later. Same table as dsh-skin's
 # verify/make_publish.cjs REWRITES.
+#
+# NOTE: the two drive-prefix keys MUST be built at runtime, not written literally.
+#   Reason (a real leak, measured 10-21): the copy step rewrites TEXT. If the
+#   literal drive prefix appears in this file, the copy step replaces it with
+#   its own VALUE -> in the published copy the key becomes the placeholder and
+#   the value is the same string -> key == value -> the rewrite is a no-op.
+#   Consequence: someone who takes the published package and re-packs it gets
+#   **no sanitization at all** - real paths would sail straight into the new
+#   package. Building the key at runtime keeps the literal out of the file,
+#   so the published copy keeps working keys.
+#   NOTE: never write the placeholder itself in a comment either - the copy
+#   step would rewrite that comment too, putting Chinese into the copy.
+$SEP = [char]0x5C                                        # backslash
+$DRIVE_E  = 'E:' + $SEP + 'deepseek'
+$DRIVE_E2 = 'E:' + '/' + 'deepseek'
 $textExt = @(".js", ".cjs", ".mjs", ".json", ".yml", ".yaml", ".md", ".txt", ".py", ".css", ".svg", ".html", ".xml", ".ps1")
 $rewrites = [ordered]@{
   $BOSS        = $PH_BOSS
@@ -101,8 +156,8 @@ $rewrites = [ordered]@{
   $WS_SHENGHUO = $PH_WORKSPACE
   $WS_SHAOBING = $PH_WORKSPACE
   $WS_ZILIAO   = $PH_WORKSPACE
-  '<你的数据目录>'  = $PH_DATADIR
-  '<你的数据目录二>'  = $PH_DATADIR2
+  $DRIVE_E     = $PH_DATADIR
+  $DRIVE_E2    = $PH_DATADIR2
 }
 
 $rewritten = 0
@@ -142,10 +197,15 @@ Get-ChildItem $Source -Recurse -File | ForEach-Object {
         }
       }
       if ($changed) { $rewritten++ }
-      # Write the copy WITH BOM: this script contains Chinese, and PS 5.1
-      # parses a BOM-less .ps1 as ANSI -> mojibake -> syntax error.
-      # Without the BOM the published copy could not even be run by anyone else.
-      [System.IO.File]::WriteAllText($dest, $text, (New-Object System.Text.UTF8Encoding($true)))
+      # BOM policy: ONLY .ps1 gets a BOM.
+      #   Why: Windows PowerShell 5.1 reads a BOM-less .ps1 as the system ANSI
+      #   code page (GBK here) -> mojibake -> syntax error -> the published
+      #   copy could not even be run. That is a real, measured failure.
+      #   Why not the other text files: a BOM in .md/.json/.js/.mjs is noise -
+      #   it shows up as a "\ufeff" in every diff and can break strict JSON
+      #   parsers. Those formats are read as UTF-8 by everything modern.
+      $enc = if ($ext -eq '.ps1') { New-Object System.Text.UTF8Encoding($true) } else { New-Object System.Text.UTF8Encoding($false) }
+      [System.IO.File]::WriteAllText($dest, $text, $enc)
     } else {
       Copy-Item $_.FullName $dest -Force
     }
@@ -181,7 +241,7 @@ login-link.txt
 upstream.json
 door-state.json
 '@
-[System.IO.File]::WriteAllText((Join-Path $Target '.gitignore'), $gitignore, (New-Object System.Text.UTF8Encoding($true)))
+[System.IO.File]::WriteAllText((Join-Path $Target '.gitignore'), $gitignore, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host ""
 Write-Host "OK - publish copy generated: $Target"
@@ -210,9 +270,12 @@ Write-Host "running the sanitization self-check (a failure blocks the upload)...
 $checkArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $sanitizeScript, '-Target', $Target)
 # The channel table (real wecom webhook) lives outside the plugin dir -> pass it in.
 if (-not $PushChannels) {
-  $PushChannels = '<你的数据目录>\' + $WS_TOUYAN + '\' +
-    (U @(0x6838,0x5FC3,0x8D44,0x4EA7,0x6295,0x7814,0x6570,0x636E,0x5E93)) + '\' +
-    (U @(0x6570,0x636E,0x53F0,0x8D26)) + '\push_channels.json'
+  # Use the runtime-built drive prefix (see $DRIVE_E above) - a literal drive
+  # prefix written here would be rewritten into its own value in the
+  # published copy, which silently breaks the default path there.
+  $PushChannels = $DRIVE_E + $SEP + $WS_TOUYAN + $SEP +
+    (U @(0x6838,0x5FC3,0x8D44,0x4EA7,0x6295,0x7814,0x6570,0x636E,0x5E93)) + $SEP +
+    (U @(0x6570,0x636E,0x53F0,0x8D26)) + $SEP + 'push_channels.json'
 }
 if (Test-Path $PushChannels) { $checkArgs += @('-PushChannels', $PushChannels) }
 & powershell @checkArgs

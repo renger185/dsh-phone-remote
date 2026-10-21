@@ -1,4 +1,4 @@
-﻿# Phone Remote · 手机远程操控 DSH 界面
+# Phone Remote · 手机远程操控 DSH 界面
 
 > 让安卓/iPhone 手机在外面也能用**浏览器原生页面**打开本机的 DeepSeek Harness（DSH），
 > 收「任务跑完」提醒，并在手机上给电脑发一句话就能**召唤**远程入口。

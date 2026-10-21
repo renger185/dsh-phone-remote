@@ -88,7 +88,7 @@
 | 组件 | 进程/文件 | 职责 | 是否需公网地址 |
 |---|---|---|---|
 | DSH 插件（Host 半） | `index.js` | 生成带钥匙入口链接；写 `upstream.json`；任务完成/出错推送 | 否 |
-| DSH 插件（Client 半） | `client.js` | 「📱 指挥台」面板：工作区分区 + 忙闲 + 派活 | 否 |
+| DSH 插件（Client 半） | `client.js` | 「手机远程」面板：工作区分区 + 忙闲 + 派活 | 否 |
 | 传达室 | `phone-proxy.mjs` | 51130 → DSH loopback；改写 `Host`/`Origin`；无票据时续钥匙 | 仅局域网 |
 | 保活壳 | `phone-proxy-supervisor.mjs` | 子进程挂了自动重启；重复启动自动让位 | — |
 | 临时门 | `temp-door.mjs` | 起公网 HTTPS 隧道；到点自动关；链接推送 | **临时** |

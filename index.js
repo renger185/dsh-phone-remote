@@ -1,4 +1,4 @@
-﻿/**
+/**
  * phone-remote — Host half.
  *
  * 1. On activation: mint the authenticated launch URL (webApp advertised root

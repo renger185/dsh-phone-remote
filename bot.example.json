@@ -1,4 +1,4 @@
-﻿{
+{
   "_comment": "机器人长连接凭据模板（脱敏）。复制成 bot/wecom-bot.json 并填真实值；该文件已被 .gitignore 排除。",
   "_where_to_get": {
     "企业微信": "管理后台 → 应用管理/机器人 → 智能机器人 → Bot ID 与 Secret（长连接模式）",
