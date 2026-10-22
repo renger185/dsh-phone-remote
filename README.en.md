@@ -20,6 +20,14 @@ DSH's Web UI listens on `127.0.0.1` only, so a phone cannot reach it. This proje
 | 3 | Get notified when a task finishes or fails | Any **webhook push channel** (WeCom group bot, Feishu, DingTalk, ntfy…) |
 | 4 | Summon from anywhere by sending one chat message | **Bot long connection** (Bot ID + Secret, outbound only) |
 
+> **Notification links always use the public door (v0.3.0+)**: before pushing, the plugin reuses a still-alive door
+> (`doorMinRemainingMs` defaults to `0` — reuse while valid, never reopen early; when reusing, the message only says
+> “the door is still open” and does **not** repeat the link); otherwise it opens one (`doorMinutes` defaults to
+> **480 = 8 h**). **Entering requires the gate key** (`?gate=<gateKey>`, 32 random characters that die with the door):
+> **the bare domain returns 401**, but **anyone holding the full link can get in until the door closes** —
+> see [`docs/SECURITY.md`](docs/SECURITY.md) §2 for that boundary and what to do about it.
+> If the door cannot be opened, the notification is sent **without a link** (plus a one-line note) — never a dead link.
+
 ## Layout
 
 ```

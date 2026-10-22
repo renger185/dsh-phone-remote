@@ -92,7 +92,12 @@ $PH_BOSS      = "boss"
 $excludeFiles = @(
   'cordis.patch.yml', 'wecom-bot.json', 'wecom-app.json',
   'push.json', 'push_channels.json',
-  'login-link.txt', 'upstream.json', 'door-state.json'
+  'login-link.txt', 'upstream.json', 'door-state.json',
+  # 2026-10-22 owner rule: the repo address now lives in a local note
+  # (REPO_ADDRESS.md). It contains local workspace paths -> must not be
+  # published. ASCII name on purpose: this file must stay pure ASCII
+  # (see the note at the top of this script).
+  'REPO_ADDRESS.md'
 )
 $excludeDirs = @('node_modules', 'logs', 'bin')
 

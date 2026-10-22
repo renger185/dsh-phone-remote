@@ -195,9 +195,9 @@ client.on('message.text', async (frame) => {
   const streamId = generateReqId('stream')
   if (text.includes('开门')) {
     await client.replyStream(frame, streamId, '收到，正在开门…', false)
-    const link = await openDoor(30)                    // 见下：起临时门并解析出公网地址
+    const link = await openDoor(480)                   // 见下：起临时门（480 分钟 = 8 小时）并解析出公网地址
     await client.replyStream(frame, streamId,
-      link ? `**临时门已开（30 分钟）**\n[点此打开](${link})` : '开门失败，请看电脑日志。', true)
+      link ? `**临时门已开（8 小时）**\n[点此打开](${link})` : '开门失败，请看电脑日志。', true)
   } else {
     await client.replyStream(frame, streamId, `收到：${text}`, true)
   }
@@ -257,7 +257,7 @@ Start-ScheduledTask -TaskName "DshWecomBot"
 在企微里找到该机器人，发一句 **「开门」**。预期：
 
 1. 秒回「收到，正在开门…」
-2. 十几秒后回「**临时门已开（30 分钟）**」+ 可点链接
+2. 十几秒后回「**临时门已开（8 小时）**」+ 可点链接（链接带门钥匙，只拿到域名打不开）
 
 ---
 
@@ -301,7 +301,8 @@ Start-ScheduledTask -TaskName "DshWecomBot"
 | 回消息报 `errcode 41004` | 缺 `Secret`（只配了 Token/AESKey） | 补齐凭据 |
 | 推送没到手机 | 群机器人被移除 / 手机通知权限关了 | 群里看机器人是否还在；检查系统通知 |
 | 电脑重启后面板消失 | 插件 Host 半没起来 | 查插件行是否启用、计划任务是否在跑 |
-| **通知里的链接出门打不开** | 老版本通知里放的是局域网地址（出门在公网不存在） | 升到 **v0.3.0**：通知自动开一扇 30 分钟的门、带公网链接（`PITFALLS.md` 第 17 条） |
+| **通知里的链接出门打不开** | 老版本通知里放的是局域网地址（出门在公网不存在） | 升到 **v0.3.0+**：通知自动复用/开一扇临时门（默认 8 小时）、带公网链接（`PITFALLS.md` 第 17 条） |
+| **链接能打开但界面报 `Failed to load plugins`** | 代理把 DSH 的 `plugins/??...&rev=...` 模块地址编码坏了 | 升到 **v0.3.3**：`stripGateParam()` 只动带 `gate=` 的 URL，其余原样（`PITFALLS.md` 第 19 条） |
 | **门"开了"但点开 530 / 转圈** | 只看到公网地址、隧道其实没连上 | 升级 `temp-door.mjs`：要"地址+`Registered tunnel connection`"，还要公网侧实拨一次（`PITFALLS.md` 第 15 条） |
 | **机器人常在线却收不到消息** | 长连接静默假死 | 用带自检自愈的 `wecom-bot.mjs`：未连接 2 分钟重连、5 分钟未连接就退出重拉（`PITFALLS.md` 第 16 条） |
 

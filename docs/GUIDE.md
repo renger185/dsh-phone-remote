@@ -181,11 +181,15 @@ client.connect()
 
 发通知（任务跑完 / 出错 / 入口更新）时，插件按这个顺序拿链接：
 
-1. 读本机 `door-state.json`，**现成的门还剩 ≥10 分钟** → 直接复用它的公网地址（不多开门）；
-2. 否则**自动开一扇 30 分钟的门**（`temp-door.mjs --minutes 30 --quiet`，
+1. 读本机 `door-state.json`，**现成的门还活着**（`doorMinRemainingMs` 默认 `0`：只要没到期就复用）
+   → 直接复用它的公网地址，**不重开门**；
+   **复用时不重复给链接**，通知里只说明"门没关"，避免同一条链接反复推；
+2. 没有可用的门 → **自动开一扇**（`temp-door.mjs --minutes <doorMinutes> --quiet`，
    `--quiet` 表示门自己不再推消息，免得一条通知变两条），等它写出门状态后取公网地址；
+   **`doorMinutes` 默认 `480`（8 小时）**，要短就配 `3` / `30`；
+   （注意：直接手跑 `temp-door.mjs` 不带 `--minutes` 时，脚本自己的默认值是 **30 分钟**）
 3. 门没开成（连试 3 次都不行）→ **通知照发，但不带链接**，正文里说明一句；
    **绝不推一条点不开的死链接**。
 
 相关配置：`doorScript` / `doorStateFile` / `doorMinutes` / `doorMinRemainingMs` / `doorOpenTimeoutMs`
-（默认取 `linkFile` 同目录，通常不用配）。安全影响见 `docs/SECURITY.md` 第 2.1 节。
+（默认取 `linkFile` 同目录，通常不用配）。安全影响见 `docs/SECURITY.md` 第 2 节。

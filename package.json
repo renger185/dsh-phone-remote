@@ -1,6 +1,6 @@
 {
     "name":  "@local/dsh-phone-remote",
-    "version": "0.3.3",
+    "version": "0.3.4",
     "private":  true,
     "type":  "module",
     "description":  "Phone Remote: mobile console panel (workspace partitions + session status + dispatch), platform-agnostic push on task completion, tokenized mobile login link, bot long-connection summon.",

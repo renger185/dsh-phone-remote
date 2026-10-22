@@ -199,9 +199,9 @@ client.on('message.text', async (frame) => {
   const streamId = generateReqId('stream')
   if (text.includes('开门')) {
     await client.replyStream(frame, streamId, 'Got it, opening the door…', false)
-    const link = await openDoor(30)                 // see below: start the door and parse its public URL
+    const link = await openDoor(480)                // see below: start the door (480 min = 8 h) and parse its public URL
     await client.replyStream(frame, streamId,
-      link ? `**Door open (30 min)**\n[Open it here](${link})` : 'Failed to open the door; check the PC logs.', true)
+      link ? `**Door open (8 h)**\n[Open it here](${link})` : 'Failed to open the door; check the PC logs.', true)
   } else {
     await client.replyStream(frame, streamId, `Received: ${text}`, true)
   }
@@ -263,7 +263,8 @@ Confirm in the log:
 Find the bot in WeCom and send **“开门”**. Expected:
 
 1. an immediate reply: “Got it, opening the door…”;
-2. a few seconds later: “**Door open (30 min)**” plus a tappable link.
+2. a few seconds later: “**Door open (8 h)**” plus a tappable link
+   (the link carries the gate key — the bare domain alone returns 401).
 
 ---
 

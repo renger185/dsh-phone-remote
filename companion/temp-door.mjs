@@ -10,16 +10,20 @@
  *
  * 开门：在本机起一条 cloudflared 快速隧道（公网 https，Cloudflare 证书），
  *       指向本目录的传达室代理（127.0.0.1:51130），把公网地址推到推送出口，
- *       到点（默认 30 分钟，可 --minutes 3）自动断掉，链接随即失效。
+ *       到点自动断掉，链接随即失效（**脚本自己的默认值 30 分钟**，可用 --minutes 改；
+ *       插件自动开门时会显式传 `doorMinutes`，**默认 480 = 8 小时**）。
  * 关门：temp-door --close 立即关掉当前门。
  *
  * 用法：
- *   node temp-door.mjs                 # 开 30 分钟
+ *   node temp-door.mjs                 # 开 30 分钟（脚本默认）
+ *   node temp-door.mjs --minutes 480   # 开 8 小时（插件自动开门用的就是这个）
  *   node temp-door.mjs --minutes 3     # 开 3 分钟
  *   node temp-door.mjs --close         # 立即关
  *   node temp-door.mjs --quiet         # 只开门、不推消息（调用方自己发链接时用）
  *
- * 说明：只开一扇门，门开着时公网能扫到这个地址（没有登录钥匙进不去，但能看到登录页），
+ * 说明：只开一扇门。**进门必须带门钥匙**（`?gate=<gateKey>`，开门时随机生成 32 字符）：
+ *       只拿到域名访问一律 **401**（连页面内容都不返回）；钥匙正确才放行并下发免密 cookie。
+ *       但**拿到完整链接的人在门关之前都能进** —— 这条边界见 `docs/SECURITY.md` 第 2 节。
  *       所以到点必须关——这就是本脚本存在的意义。链路全 TLS。
  *
  * 2026-10 加固（踩坑总结见 docs/PITFALLS.md 第 15 条）：
