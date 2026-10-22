@@ -1,10 +1,17 @@
 /**
- * temp-door — 临时限时门（平台无关版：推送出口走 PUSH_WEBHOOK / push.json）。
+ * temp-door — 临时限时门【对外发布版 · 平台无关】
+ *
+ * ⛔⛔ 我是哪一份（10-22 加，防止拿错）：
+ *   **本文件 = 对外发布给别人的模板版**（走 PUSH_WEBHOOK / push.json，路径全相对）。
+ *   **本机生产真源是另一份**：`<你的数据目录>\<你的工作区>\手机远程插件-dsh-phone-remote\temp-door.mjs`
+ *   （走企业微信 p2 通道、通道地址写死在本机）。**本机跑活的是那一份，不是本文件。**
+ *   两份是"同功能、不同推送出口"，不是同一份的两个副本。
+ *   ⛔ **不要把本文件当成生产脚本去改生产**——改了不生效（生产跑的是上面那个路径）。
  *
  * 开门：在本机起一条 cloudflared 快速隧道（公网 https，Cloudflare 证书），
  *       指向本目录的传达室代理（127.0.0.1:51130），把公网地址推到推送出口，
  *       到点（默认 30 分钟，可 --minutes 3）自动断掉，链接随即失效。
- * 关门：temp-door --close 立即断掉当前门。
+ * 关门：temp-door --close 立即关掉当前门。
  *
  * 用法：
  *   node temp-door.mjs                 # 开 30 分钟
@@ -28,6 +35,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -56,6 +64,23 @@ function log(line) {
     fs.appendFileSync(LOG_FILE, text + '\n', 'utf8')
   } catch {}
   console.log(text)
+}
+
+// 10-22 加：运行时自报家门。
+// 本机有**两份** temp-door.mjs（本文件=对外发布模板、另一份=本机生产真源），
+// 以前光看日志分不出是哪份在跑。现在每条日志行都带身份标记，一眼可辨。
+// ⚠ 这里刻意**不写本机路径**（这份是发布给别人的，必须保持脱敏）。
+const SCRIPT_ID = '【对外发布模板】'
+log(`${SCRIPT_ID} temp-door 启动｜目录=${HERE}｜推送出口=PUSH_WEBHOOK/push.json｜安静模式=${QUIET ? '是' : '否'}`)
+
+// 10-22 加：启动自检 —— 这份是**对外发布模板**，本机跑它是跑错份了。
+// 跑错的实际后果（实测）：本文件的门状态写在**自己目录下**的 door-state.json，
+//   而生产门状态在**另一个目录** → 跑这份既开不出生产门、也关不掉生产门，
+//   还会凭空多一扇"只有它自己知道"的野门。
+// 所以这里明确提示，不静默跑偏。
+if (fs.existsSync(path.join(HERE, 'phone-proxy.mjs'))) {
+  log('⚠ 提醒：本目录里有 phone-proxy.mjs，看着像**本机生产环境**。'
+    + '如果你是想开关生产的门，应该跑生产真源那份（不是本文件），否则门会开在本目录、跟生产对不上。')
 }
 
 function pushWebhook() {
@@ -246,11 +271,23 @@ if (!opened) {
 const { child, url: publicUrl } = opened
 const expiresAt = new Date(Date.now() + minutes * 60 * 1000)
 const hhmm = expiresAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+
+// ── 门钥匙（10-22 加）────────────────────────────────────────────
+// 开门时生成一把随机钥匙，写进门状态。传达室（phone-proxy）会校验它：
+//   进门必须带这把钥匙（?gate=xxx），**没钥匙一律 401**，不再自动给人续签。
+// 钥匙**跟着门一起过期**（expiresAt 一过就作废）。
+const gateKey = crypto.randomBytes(24).toString('base64url')
+
 fs.writeFileSync(STATE_FILE, JSON.stringify({
   pid: child.pid, url: publicUrl, openedAt: new Date().toISOString(), expiresAt: expiresAt.toISOString(), minutes,
+  gateKey,
 }, null, 2) + '\n', 'utf8')
-log(`门已开: ${publicUrl}（${hhmm} 自动关）`)
-await wecomPush('小昭：临时远程门已开', `门外可直接用浏览器打开 Harness（已实测公网可达；本次有效至 ${hhmm}，到点自动关闭）。`, publicUrl)
+log(`门已开: ${publicUrl}（${hhmm} 自动关）｜门钥匙已生成（${gateKey.length} 字符，有效期跟门一致）`)
+
+// 带钥匙的链接：这是唯一能进门的地址。
+// ⚠️ 钥匙在链接里 = 链接泄露 = 钥匙泄露。所以**绝不能**再把不带钥匙的裸地址推给任何人。
+const gatedUrl = `${publicUrl}/?gate=${encodeURIComponent(gateKey)}`
+await wecomPush('小昭：临时远程门已开', `门外可直接用浏览器打开 Harness（已实测公网可达；本次有效至 ${hhmm}，到点自动关闭）。`, gatedUrl)
 
 let closing = false
 child.on('exit', (code) => {

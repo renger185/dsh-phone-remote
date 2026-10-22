@@ -25,7 +25,7 @@
 
 const PUSH_TIMEOUT_MS = 10000
 
-import { readFileSync, writeFileSync, unlinkSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, unlinkSync, statSync, existsSync, appendFileSync, mkdirSync } from 'node:fs'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -52,12 +52,37 @@ export function apply(ctx, config) {
   const idleDebounceMs = Number(config.idleDebounceMs ?? 15000)
   const mobileBase = (config.mobileBaseUrl || '').trim()
 
-  // —— 公网门相关配置（10-19 加）———————————————————————————————
-  // 门脚本与门状态文件默认就放在 linkFile 同目录（本机就是 remote-gateway 那份）。
+  // —— 插件自己的日志（10-22 加）———————————————————————————————
+  // 为什么要有：插件原先所有痕迹都走 ctx.logger（DSH 主日志），
+  //   而**成功路径不留痕**（只有失败才 warn）→ 事后查"这次到底推没推成功、
+  //   推的是哪条、带的哪个链接"无从下手，只能靠猜。
+  // 现在：每次推送（成功/失败都记）都往这个文件追加一行，格式跟 temp-door.log 一致，
+  //   跟机器人日志、开门日志放同一个 logs 目录，一眼能对时间线。
+  // 规矩：**写日志失败绝不影响插件本身**（吞掉异常）。
+  const pluginLogFile = (config.pluginLogFile || '').trim() || join(dirname(linkFile), 'logs', 'phone-remote.log')
+  function pluginLog(line) {
+    try {
+      mkdirSync(dirname(pluginLogFile), { recursive: true })
+      appendFileSync(pluginLogFile, `[${new Date().toISOString()}] ${line}\n`, 'utf8')
+    } catch { /* 记日志失败不影响主流程 */ }
+  }
+
+  // —— 公网门相关配置（10-19 加，10-22 改）———————————————————————
+  // 门脚本与门状态文件默认就放在 linkFile 同目录（本机就是 手机远程插件-dsh-phone-remote 那份）。
   const doorScript = (config.doorScript || '').trim() || join(dirname(linkFile), 'temp-door.mjs')
   const doorStateFile = (config.doorStateFile || '').trim() || join(dirname(linkFile), 'door-state.json')
-  const doorMinutes = Number(config.doorMinutes ?? 30) // 每次开门给 30 分钟
-  const doorMinRemainingMs = Number(config.doorMinRemainingMs ?? 10 * 60 * 1000) // 现成的门剩不到 10 分钟就重开
+  const doorMinutes = Number(config.doorMinutes ?? 480) // 每次开门给 8 小时（10-22 boss要"链接能用更久"）
+  // ⚠ 配合门闸（10-22）：门钥匙**跟着门一起过期**，门关了钥匙就作废 →
+  //   就算 DSH 那枚 30 天 cookie 还在，没有当前门钥匙也进不来。
+  //   ⇒ 门开得久，**暴露的时间变长，但"别人能进去"没变**。
+  // ⛔ 10-22 改（boss原话：「如果上一个开门操作仍在有效时间内，则只推送任务完成的消息，
+  //   无需再提供开门网址，只需说明『门没关』即可。」）：
+  //   原来有个"剩不到 10 分钟就重开"的门槛（doorMinRemainingMs）。**取消它**。
+  //   为什么取消：剩 1-9 分钟时重开一扇新门，**boss手上那条旧链接会当场作废**
+  //   （开门脚本先关旧门再开新门），他正要点就点了寂寞；而且他刚收到的通知里
+  //   一条链接、推送里又来一条，两条对不上。
+  //   现在：**只要门还没过期就复用同一个链接**，一律不重开。
+  const doorMinRemainingMs = Number(config.doorMinRemainingMs ?? 0)
   const doorOpenTimeoutMs = Number(config.doorOpenTimeoutMs ?? 120000) // 等门开出来的上限
 
   // 企业微信通道：优先直接给 wecomWebhook；否则从<你的工作区>那份 push_channels.json
@@ -99,13 +124,57 @@ export function apply(ctx, config) {
     }
   }
 
-  /** 现成的门还有效吗？返回 { url, leftMs } 或 null。 */
+  /**
+   * 现成的门还有效吗？返回 { url, gateKey, leftMs } 或 null。
+   *
+   * ⛔ 2026-10-22 加（boss投诉「门没关」那次的根因）：
+   *   原来只看状态文件里的 expiresAt，**不看隧道进程死没死**。
+   *   DSH 一重启（换实例），门是 DSH 的子进程 → 被一起带走，隧道当场死掉、
+   *   公网域名随之失效；但状态文件还写着"开着、有效到 xx:xx"，
+   *   插件就把它当成"还有一扇开着的门"去复用 → **推给boss一条点不开的死链**。
+   *   实测（10-22 01:07）：状态文件说门开到 01:20，实测域名已解析不出、进程已死。
+   *
+   *   现在必须**两道都过**才认这扇门：
+   *     ① 时间没到（expiresAt 还没过）；
+   *     ② 隧道进程（状态文件里的 pid）**真的还活着**。
+   *   进程死了 → 状态文件是假的 → 当作没门，重新开一扇。
+   *
+   * ⛔ 10-22 再加（门闸）：返回的门钥匙（gateKey）必须有值。
+   *   传达室现在要求带 ?gate=xxx 才放行，**没钥匙的链接一律 401**。
+   *   所以复用旧门时也必须带上那扇门自己的钥匙（没过期就还是那把）。
+   */
   function readLiveDoor() {
     const state = readDoorRaw()
     if (!state?.url) return null
     const leftMs = Date.parse(state.expiresAt ?? '') - Date.now()
     if (!Number.isFinite(leftMs) || leftMs <= 0) return null
-    return { url: String(state.url), leftMs }
+    if (!isDoorProcessAlive(state)) {
+      ctx.logger?.warn?.('phone-remote: 门状态文件说门开着，但隧道进程已死（多半是 DSH 重启把门带走了），按"没有门"处理')
+      pluginLog('门状态文件说门开着，但隧道进程已死 → 按没有门处理（会重开一扇）')
+      return null
+    }
+    const gateKey = String(state.gateKey || '').trim()
+    if (!gateKey) {
+      ctx.logger?.warn?.('phone-remote: 门状态里没有门钥匙（老版本开的门），按"没有门"处理')
+      pluginLog('门状态里没有门钥匙（老版本开的门）→ 按没有门处理（会重开一扇带钥匙的门）')
+      return null
+    }
+    const base = String(state.url).replace(/\/+$/, '')
+    return { url: `${base}/?gate=${encodeURIComponent(gateKey)}`, gateKey, leftMs }
+  }
+
+  /** 状态文件里记的隧道进程还活着吗？（Windows 上查进程存在性） */
+  function isDoorProcessAlive(state) {
+    const pid = Number(state?.pid)
+    if (!Number.isFinite(pid) || pid <= 0) return false
+    try {
+      // kill(pid, 0) 不发信号，只探活；ESRCH = 进程没了。
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      // EPERM 也算活着（进程在，只是权限不够）
+      return String(error?.code ?? '') === 'EPERM'
+    }
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -135,7 +204,14 @@ export function apply(ctx, config) {
       const openedAt = Date.parse(state?.openedAt ?? '')
       const expiresAt = Date.parse(state?.expiresAt ?? '')
       if (state?.url && Number.isFinite(openedAt) && openedAt >= startedAt - 5000 && expiresAt > Date.now()) {
-        return String(state.url)
+        // 门钥匙（10-22 加）：传达室要求带 ?gate=xxx 才放行。
+        // 没有钥匙的裸地址会被 401 挡掉，所以这里必须把钥匙拼进链接。
+        const gateKey = String(state?.gateKey || '').trim()
+        const base = String(state.url).replace(/\/+$/, '')
+        return {
+          url: gateKey ? `${base}/?gate=${encodeURIComponent(gateKey)}` : base,
+          gateKey,
+        }
       }
       if (exited) break
     }
@@ -144,19 +220,42 @@ export function apply(ctx, config) {
 
   let doorPromise = null
 
-  /** 要一条公网链接：现成的够用就复用，否则开一扇新的；开不出来返回 null。 */
+  /**
+   * 要一条公网链接。
+   *
+   * 返回 { url, reused }：
+   *   reused = true  → 这扇门是**上一扇还没关的门**，直接复用同一个地址（不新开）；
+   *   reused = false → 刚新开的门（旧的已过期或已死）。
+   * url = null      → 门没开成（调用方这时**不带链接**，只说明一句）。
+   *
+   * 2026-10-22 boss定：「链接还没过期就继续用上一个链接，只有过期了才推新的」。
+   * 所以这里先看有没有还活着的门，有就直接复用，不新开。
+   */
   async function ensurePublicLink() {
     const existing = readLiveDoor()
-    if (existing && existing.leftMs >= doorMinRemainingMs) return existing.url
+    if (existing && existing.leftMs >= doorMinRemainingMs) {
+      const leftMin = Math.round(existing.leftMs / 60000)
+      ctx.logger?.info?.(`phone-remote: 复用还没关的门（还剩 ${leftMin} 分钟）`)
+      pluginLog(`复用门（没重开）｜还剩 ${leftMin} 分钟｜链接=${existing.url}`)
+      return { url: existing.url, reused: true, leftMs: existing.leftMs }
+    }
     if (!doorPromise) {
       doorPromise = (async () => {
         try {
-          const url = await openDoor()
-          if (!url) ctx.logger?.warn?.('phone-remote: 公网门没开成，本次通知不带链接')
-          return url
+          const opened = await openDoor()
+          const url = opened?.url ?? null
+          if (!url) {
+            ctx.logger?.warn?.('phone-remote: 公网门没开成，本次通知不带链接')
+            pluginLog('开新门失败｜本次通知不带链接')
+            return { url: null, reused: false, leftMs: 0 }
+          }
+          pluginLog(`开了新门｜链接=${url}`)
+          return { url, reused: false, leftMs: 0 }
         } catch (error) {
-          ctx.logger?.warn?.('phone-remote: 开公网门异常: ' + String(error?.message ?? error))
-          return null
+          const detail = String(error?.message ?? error)
+          ctx.logger?.warn?.('phone-remote: 开公网门异常: ' + detail)
+          pluginLog('开新门异常｜' + detail)
+          return { url: null, reused: false, leftMs: 0 }
         } finally {
           doorPromise = null
         }
@@ -185,10 +284,20 @@ export function apply(ctx, config) {
       })
       const data = await response.json().catch(() => ({}))
       if (data.errcode !== 0) {
-        ctx.logger?.warn?.(`phone-remote: wecom errcode=${String(data.errcode)} ${String(data.errmsg ?? '')}`)
+        const detail = `wecom errcode=${String(data.errcode)} ${String(data.errmsg ?? '')}`
+        ctx.logger?.warn?.('phone-remote: ' + detail)
+        pluginLog(`推送失败（企微）｜标题=${title}｜${detail}`)
+        return false
       }
+      // 成功也留痕（10-22 加）：事后能自证"这次推没推成功、推的哪条、带没带链接"
+      pluginLog(`推送成功（企微）｜标题=${title}｜带链接=${link ? '是' : '否'}${link ? '｜链接=' + link : ''}`)
+      ctx.logger?.info?.('phone-remote: wecom 推送成功: ' + title)
+      return true
     } catch (error) {
-      ctx.logger?.warn?.('phone-remote: wecom push failed: ' + String(error?.message ?? error))
+      const detail = String(error?.message ?? error)
+      ctx.logger?.warn?.('phone-remote: wecom push failed: ' + detail)
+      pluginLog(`推送失败（企微）｜标题=${title}｜异常=${detail}`)
+      return false
     } finally {
       clearTimeout(kill)
     }
@@ -209,9 +318,16 @@ export function apply(ctx, config) {
       })
       if (!response.ok) {
         ctx.logger?.warn?.('phone-remote: ntfy responded ' + response.status)
+        pluginLog(`推送失败（ntfy）｜标题=${title}｜HTTP ${response.status}`)
+        return false
       }
+      pluginLog(`推送成功（ntfy）｜标题=${title}`)
+      return true
     } catch (error) {
-      ctx.logger?.warn?.('phone-remote: ntfy push failed: ' + String(error?.message ?? error))
+      const detail = String(error?.message ?? error)
+      ctx.logger?.warn?.('phone-remote: ntfy push failed: ' + detail)
+      pluginLog(`推送失败（ntfy）｜标题=${title}｜异常=${detail}`)
+      return false
     } finally {
       clearTimeout(kill)
     }
@@ -222,6 +338,12 @@ export function apply(ctx, config) {
     const jobs = []
     if (wecomWebhook) jobs.push(pushWecom(title, message, link))
     if (useNtfy) jobs.push(pushNtfy(title, message, link))
+    if (!jobs.length) {
+      // 没配任何推送通道 → 这条通知谁也收不到，得留痕（不然事后以为推了）
+      pluginLog(`没推送（未配置任何推送通道）｜标题=${title}`)
+      ctx.logger?.warn?.('phone-remote: 没配置任何推送通道，本次通知没发出去: ' + title)
+      return
+    }
     await Promise.all(jobs)
   }
 
@@ -248,8 +370,16 @@ export function apply(ctx, config) {
         const door = await ensurePublicLink()
         await push(
           '小昭：手机远程入口已更新',
-          door ? `点链接直接从公网打开 Harness（公网门 30 分钟内有效）。` : '公网门这次没开成，没带链接；需要时发「开门」给我。',
-          door ?? undefined,
+          door.url
+            ? (door.reused
+              // ⛔ boss 10-22 原话：「如果上一个开门操作仍在有效时间内，则只推送任务完成的消息，
+              //   无需再提供开门网址，只需说明『门没关』即可。」
+              //   → 复用旧门时**不再贴链接**，只说一句门没关（链接还在用上一条消息里那个）。
+              ? '手机远程入口已更新；公网门没关，继续用上一条消息里的链接。'
+              : '点链接直接从公网打开 Harness（公网门 30 分钟内有效）。')
+            : '公网门这次没开成，没带链接；需要时发「开门」给我。',
+          // 复用旧门 → 不再提供开门网址（boss 10-22 定）
+          door.reused ? undefined : door.url ?? undefined,
         )
       }
     } catch (error) {
@@ -275,8 +405,15 @@ export function apply(ctx, config) {
           const door = await ensurePublicLink()
           await push(
             '小昭：任务跑完了',
-            door ? '这一轮活干完了，点链接直接看结果（公网门 30 分钟内有效）。' : '这一轮活干完了。公网门这次没开成，需要时发「开门」给我。',
-            door ?? undefined,
+            door.url
+              ? (door.reused
+                // ⛔ boss 10-22 定：门没过期就复用上一个链接，只推任务完成的消息，
+                //   说明「门没关」即可，**无需再提供开门网址**。
+                ? '这一轮活干完了。门没关，上一条公网链接还能用（还剩 ' + Math.ceil((door.leftMs ?? 0) / 60000) + ' 分钟）。'
+                : '这一轮活干完了，点链接直接看结果（公网门 30 分钟内有效）。')
+              : '这一轮活干完了。公网门这次没开成，需要时发「开门」给我。',
+            // 复用旧门 → 不再提供开门网址（boss 10-22 定）
+            door.reused ? undefined : door.url ?? undefined,
           )
         })()
       }, idleDebounceMs)
@@ -288,8 +425,9 @@ export function apply(ctx, config) {
       const door = await ensurePublicLink()
       await push(
         '小昭：任务出错了',
-        `${String(message ?? '会话报错，请打开界面查看')}${door ? '' : '（公网门这次没开成，没带链接）'}`,
-        door ?? undefined,
+        `${String(message ?? '会话报错，请打开界面查看')}${door.url ? (door.reused ? '（门没关，上一条链接还能用）' : '') : '（公网门这次没开成，没带链接）'}`,
+        // 复用旧门 → 不再提供开门网址（boss 10-22 定）
+        door.reused ? undefined : door.url ?? undefined,
       )
     })()
   })

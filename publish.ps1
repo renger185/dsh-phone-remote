@@ -98,7 +98,7 @@ $excludeDirs = @('node_modules', 'logs', 'bin')
 
 # NOTE: do NOT use $PSScriptRoot as the default value of $Source - under some
 # invocation styles it resolves to an empty string, the source becomes the
-# current directory, and the script recursively scans all of remote-gateway
+# current directory, and the script recursively scans the whole workspace
 # (7000+ files). Use $MyInvocation.MyCommand.Path inside the body instead.
 if ([string]::IsNullOrWhiteSpace($Source)) {
   $selfDir = Split-Path -Parent $MyInvocation.MyCommand.Path
